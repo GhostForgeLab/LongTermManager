@@ -1,7 +1,9 @@
 // ==UserScript==
 // @name         长期事项管理器 LongTerm Manager
 // @namespace    https://local.longterm.manager/
-// @version      1.0.0
+// @version      1.0.1
+// @updateURL    https://raw.githubusercontent.com/lph112358/LongTermManager/main/LongTermManager.user.js
+// @downloadURL  https://raw.githubusercontent.com/lph112358/LongTermManager/main/LongTermManager.user.js
 // @description  极简长期到期事项管理器。V1.0.0 正式版：长期到期提醒、循环续费、卡片管理、筛选统计、本地备份与数据恢复。
 // @author       You
 // @match        http://*/*

@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         长期事项管理器 LongTerm Manager
 // @namespace    https://local.longterm.manager/
-// @version      1.0.1
+// @version      1.1.0
 // @updateURL    https://raw.githubusercontent.com/lph112358/LongTermManager/main/LongTermManager.user.js
 // @downloadURL  https://raw.githubusercontent.com/lph112358/LongTermManager/main/LongTermManager.user.js
-// @description  极简长期到期事项管理器。V1.0.0 正式版：长期到期提醒、循环续费、卡片管理、筛选统计、本地备份与数据恢复。
+// @description  极简长期到期事项管理器。V1.1.0：新增主事项下的轻量子事项 Checklist，支持完成、编辑、删除与拖动排序。
 // @author       You
 // @match        http://*/*
 // @match        https://*/*
@@ -25,7 +25,7 @@
      * ======================================================= */
     const Config = Object.freeze({
         APP_NAME: '长期事项管理器',
-        APP_VERSION: '1.0.0',
+        APP_VERSION: '1.1.0',
         SCHEMA_VERSION: 1,
         MANAGER_URL: 'https://example.com/#long-term-manager',
         MANAGER_HOST: 'example.com',
@@ -442,6 +442,17 @@
             item.status = ['active', 'paused', 'archived'].includes(item.status) ? item.status : 'active';
             item.trashedAt = typeof item.trashedAt === 'string' && item.trashedAt ? item.trashedAt : null;
             item.history = Array.isArray(item.history) ? item.history : [];
+            item.subtasks = Array.isArray(item.subtasks)
+                ? item.subtasks.filter(st => st && typeof st === 'object').map((st, index) => ({
+                    id: typeof st.id === 'string' && st.id ? st.id : Utils.id('subtask'),
+                    title: String(st.title ?? '').trim() || `子事项 ${index + 1}`,
+                    completed: Boolean(st.completed),
+                    order: Number.isFinite(Number(st.order)) ? Number(st.order) : index,
+                    createdAt: typeof st.createdAt === 'string' && st.createdAt ? st.createdAt : now,
+                    updatedAt: typeof st.updatedAt === 'string' && st.updatedAt ? st.updatedAt : (st.createdAt || now),
+                    completedAt: st.completed && typeof st.completedAt === 'string' && st.completedAt ? st.completedAt : null,
+                })).sort((a, b) => a.order - b.order)
+                : [];
             item.createdAt = typeof item.createdAt === 'string' && item.createdAt ? item.createdAt : now;
             item.updatedAt = typeof item.updatedAt === 'string' && item.updatedAt ? item.updatedAt : item.createdAt;
             return item;
@@ -586,6 +597,7 @@
                 status: payload.status,
                 trashedAt: null,
                 history: [],
+                subtasks: [],
                 createdAt: now,
                 updatedAt: now,
             };
@@ -741,6 +753,99 @@
             return item;
         },
 
+        addSubtask(id, title) {
+            const clean = String(title || '').trim();
+            if (!clean) throw new Error('子事项名称不能为空');
+            if (clean.length > 200) throw new Error('子事项名称不能超过 200 个字符');
+            const db = Storage.loadDatabase();
+            const item = this.find(db, id);
+            if (!item) throw new Error('找不到该事项');
+            if (item.trashedAt) throw new Error('回收站事项不能添加子事项');
+            if (!Array.isArray(item.subtasks)) item.subtasks = [];
+            const now = Utils.nowLocalISOString();
+            item.subtasks.push({
+                id: Utils.id('subtask'),
+                title: clean,
+                completed: false,
+                order: item.subtasks.length,
+                createdAt: now,
+                updatedAt: now,
+                completedAt: null,
+            });
+            item.updatedAt = now;
+            Storage.saveDatabase(db);
+            return item.subtasks[item.subtasks.length - 1];
+        },
+
+        toggleSubtask(itemId, subtaskId, completed = null) {
+            const db = Storage.loadDatabase();
+            const item = this.find(db, itemId);
+            if (!item) throw new Error('找不到该事项');
+            if (item.trashedAt) throw new Error('回收站事项不能修改子事项');
+            const subtask = (item.subtasks || []).find(st => st.id === subtaskId);
+            if (!subtask) throw new Error('找不到该子事项');
+            const next = completed === null ? !subtask.completed : Boolean(completed);
+            const now = Utils.nowLocalISOString();
+            subtask.completed = next;
+            subtask.completedAt = next ? now : null;
+            subtask.updatedAt = now;
+            item.updatedAt = now;
+            Storage.saveDatabase(db);
+            return subtask;
+        },
+
+        renameSubtask(itemId, subtaskId, title) {
+            const clean = String(title || '').trim();
+            if (!clean) throw new Error('子事项名称不能为空');
+            if (clean.length > 200) throw new Error('子事项名称不能超过 200 个字符');
+            const db = Storage.loadDatabase();
+            const item = this.find(db, itemId);
+            if (!item) throw new Error('找不到该事项');
+            if (item.trashedAt) throw new Error('回收站事项不能修改子事项');
+            const subtask = (item.subtasks || []).find(st => st.id === subtaskId);
+            if (!subtask) throw new Error('找不到该子事项');
+            const now = Utils.nowLocalISOString();
+            subtask.title = clean;
+            subtask.updatedAt = now;
+            item.updatedAt = now;
+            Storage.saveDatabase(db);
+            return subtask;
+        },
+
+        deleteSubtask(itemId, subtaskId) {
+            const db = Storage.loadDatabase();
+            const item = this.find(db, itemId);
+            if (!item) throw new Error('找不到该事项');
+            if (item.trashedAt) throw new Error('回收站事项不能修改子事项');
+            const before = (item.subtasks || []).length;
+            if (!before) throw new Error('找不到该子事项');
+            SnapshotManager.create('before-subtask-delete', db);
+            item.subtasks = item.subtasks.filter(st => st.id !== subtaskId);
+            if (item.subtasks.length === before) throw new Error('找不到该子事项');
+            item.subtasks.forEach((st, index) => { st.order = index; });
+            item.updatedAt = Utils.nowLocalISOString();
+            Storage.saveDatabase(db);
+        },
+
+        reorderSubtask(itemId, draggedId, targetId) {
+            if (!draggedId || !targetId || draggedId === targetId) return;
+            const db = Storage.loadDatabase();
+            const item = this.find(db, itemId);
+            if (!item) throw new Error('找不到该事项');
+            if (item.trashedAt) throw new Error('回收站事项不能修改子事项');
+            const list = [...(item.subtasks || [])].sort((a, b) => a.order - b.order);
+            const from = list.findIndex(st => st.id === draggedId);
+            const to = list.findIndex(st => st.id === targetId);
+            if (from < 0 || to < 0) throw new Error('找不到要排序的子事项');
+            const [moved] = list.splice(from, 1);
+            list.splice(to, 0, moved);
+            const now = Utils.nowLocalISOString();
+            list.forEach((st, index) => { st.order = index; st.updatedAt = now; });
+            item.subtasks = list;
+            item.updatedAt = now;
+            Storage.saveDatabase(db);
+        },
+
         moveToTrash(id) {
             const db = Storage.loadDatabase();
             SnapshotManager.create('before-delete', db);
@@ -799,6 +904,7 @@
             'before-status-change': '修改事项状态前',
             'before-permanent-delete': '永久删除前',
             'before-clear-trash': '清空回收站前',
+            'before-subtask-delete': '删除子事项前',
         },
 
         create(reason, database = null) {
@@ -932,20 +1038,26 @@
         exportCSV() {
             const db = Storage.loadDatabase();
             const categoryMap = new Map(db.categories.map(c => [c.id, c.name]));
-            const headers = ['名称','分类','类型','下次日期','重复周期','金额','币种','状态','网址','备注','账号备注'];
-            const rows = db.items.filter(i => !i.trashedAt).map(item => [
-                item.name,
-                categoryMap.get(item.categoryId) || '未分类',
-                item.type === 'recurring' ? '循环事项' : '一次性事项',
-                item.dueDate,
-                ManagerUI.recurrenceLabel(item),
-                item.amount ?? '',
-                item.currency ?? '',
-                item.status === 'active' ? '正常' : item.status === 'paused' ? '暂停' : '归档',
-                item.url || '',
-                item.note || '',
-                item.accountNote || '',
-            ]);
+            const headers = ['名称','分类','类型','下次日期','重复周期','金额','币种','状态','子事项进度','子事项','网址','备注','账号备注'];
+            const rows = db.items.filter(i => !i.trashedAt).map(item => {
+                const subtasks = Array.isArray(item.subtasks) ? [...item.subtasks].sort((a,b)=>a.order-b.order) : [];
+                const done = subtasks.filter(st => st.completed).length;
+                return [
+                    item.name,
+                    categoryMap.get(item.categoryId) || '未分类',
+                    item.type === 'recurring' ? '循环事项' : '一次性事项',
+                    item.dueDate,
+                    ManagerUI.recurrenceLabel(item),
+                    item.amount ?? '',
+                    item.currency ?? '',
+                    item.status === 'active' ? '正常' : item.status === 'paused' ? '暂停' : '归档',
+                    subtasks.length ? `${done}/${subtasks.length}` : '',
+                    subtasks.map(st => `${st.completed ? '☑' : '☐'} ${st.title}`).join('；'),
+                    item.url || '',
+                    item.note || '',
+                    item.accountNote || '',
+                ];
+            });
             const csv = '\ufeff' + [headers, ...rows].map(row => row.map(Utils.csvCell).join(',')).join('\r\n');
             Utils.downloadText(`LongTermManager_Items_${Utils.todayString()}.csv`, csv, 'text/csv;charset=utf-8');
         },
@@ -1023,6 +1135,8 @@
             currency: null,
             sort: 'dueAsc',
             moreFiltersOpen: false,
+            expandedSubtasks: new Set(),
+            dragSubtask: null,
         },
 
         mount() {
@@ -1147,6 +1261,22 @@
                 .ltm-note { margin-top:8px; color:#565d67; font-size:12px; line-height:1.5; white-space:pre-wrap; overflow-wrap:anywhere; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
                 .ltm-card-actions { display:flex; gap:7px; flex-wrap:wrap; margin-top:13px; padding-top:11px; border-top:1px solid #f0f1f3; }
                 .ltm-card-actions .ltm-btn { min-height:32px; padding:6px 9px; font-size:12px; flex:0 0 auto; }
+                .ltm-subtask-summary { margin-top:10px; display:flex; align-items:center; justify-content:space-between; gap:10px; padding:9px 10px; border:1px solid #eceef1; border-radius:10px; background:#fafbfc; font-size:12px; }
+                .ltm-subtask-summary strong { font-size:12px; }
+                .ltm-subtask-summary button { border:0; background:transparent; color:#5e6672; cursor:pointer; padding:0; font-size:12px; }
+                .ltm-subtask-panel { margin-top:11px; padding-top:10px; border-top:1px dashed var(--ltm-line); }
+                .ltm-subtask-list { display:grid; gap:5px; }
+                .ltm-subtask-row { display:grid; grid-template-columns:auto auto minmax(0,1fr) auto; align-items:center; gap:7px; padding:6px 5px; border-radius:8px; }
+                .ltm-subtask-row:hover { background:#f7f8fa; }
+                .ltm-subtask-handle { color:#a1a7b0; cursor:grab; user-select:none; font-size:13px; }
+                .ltm-subtask-handle:active { cursor:grabbing; }
+                .ltm-subtask-title { font-size:12px; line-height:1.35; overflow-wrap:anywhere; }
+                .ltm-subtask-title.done { color:#969ca5; text-decoration:line-through; }
+                .ltm-subtask-actions { display:flex; align-items:center; gap:4px; }
+                .ltm-subtask-actions button { border:0; background:transparent; color:#747b85; cursor:pointer; padding:3px 4px; font-size:11px; }
+                .ltm-subtask-actions button.danger { color:var(--ltm-danger); }
+                .ltm-subtask-add { display:flex; gap:6px; margin-top:8px; }
+                .ltm-subtask-add input { flex:1; min-width:0; border:1px solid var(--ltm-line); border-radius:8px; padding:7px 8px; font-size:12px; }
                 .ltm-collapsed-summary { border:1px dashed #d7dbe1; background:rgba(255,255,255,.52); border-radius:12px; padding:13px 15px; color:var(--ltm-muted); font-size:13px; display:flex; justify-content:space-between; align-items:center; gap:12px; }
                 .ltm-empty { border:1px dashed #d8dce2; border-radius:var(--ltm-radius); background:rgba(255,255,255,.6); padding:54px 24px; text-align:center; }
                 .ltm-empty h3 { margin:0 0 8px; }
@@ -1237,6 +1367,12 @@
                 if (action === 'snooze-choice') this.applySnooze(id, Number(target.dataset.days));
                 if (action === 'clear-snooze') this.clearSnooze(id);
                 if (action === 'set-status') this.setItemStatus(id, target.dataset.status);
+                if (action === 'toggle-subtasks') this.toggleSubtasks(id);
+                if (action === 'open-subtasks') this.toggleSubtasks(id, true);
+                if (action === 'add-subtask') this.addSubtask(id);
+                if (action === 'toggle-subtask') this.toggleSubtask(id, target.dataset.subtaskId, target.checked);
+                if (action === 'edit-subtask') this.editSubtask(id, target.dataset.subtaskId);
+                if (action === 'delete-subtask') this.confirmDeleteSubtask(id, target.dataset.subtaskId);
                 if (action === 'quick-filter') this.applyQuickFilter(target.dataset.range || 'all');
                 if (action === 'apply-custom-range') this.applyCustomRange();
                 if (action === 'close-modal') this.closeModal();
@@ -1313,6 +1449,49 @@
                     this.render();
                 }
             });
+            document.addEventListener('keydown', (event) => {
+                const input = event.target.closest('[data-subtask-input]');
+                if (!input || event.key !== 'Enter') return;
+                event.preventDefault();
+                this.addSubtask(input.dataset.subtaskInput);
+            });
+
+            document.addEventListener('dragstart', (event) => {
+                const row = event.target.closest('.ltm-subtask-row[draggable="true"]');
+                if (!row) return;
+                this.state.dragSubtask = { itemId: row.dataset.itemId, subtaskId: row.dataset.subtaskId };
+                if (event.dataTransfer) {
+                    event.dataTransfer.effectAllowed = 'move';
+                    event.dataTransfer.setData('text/plain', row.dataset.subtaskId || '');
+                }
+            });
+
+            document.addEventListener('dragover', (event) => {
+                if (!this.state.dragSubtask) return;
+                const row = event.target.closest('.ltm-subtask-row[draggable="true"]');
+                if (!row || row.dataset.itemId !== this.state.dragSubtask.itemId) return;
+                event.preventDefault();
+                if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+            });
+
+            document.addEventListener('drop', (event) => {
+                const drag = this.state.dragSubtask;
+                const row = event.target.closest('.ltm-subtask-row[draggable="true"]');
+                if (!drag || !row || row.dataset.itemId !== drag.itemId) return;
+                event.preventDefault();
+                try {
+                    ItemService.reorderSubtask(drag.itemId, drag.subtaskId, row.dataset.subtaskId);
+                    this.renderListOnly();
+                } catch (error) {
+                    this.toast(error.message || '子事项排序失败');
+                } finally {
+                    this.state.dragSubtask = null;
+                }
+            });
+
+            document.addEventListener('dragend', () => {
+                this.state.dragSubtask = null;
+            });
         },
 
         persistFilterState() {
@@ -1363,7 +1542,8 @@
                 const categoryMap = this.categoryMap(db);
                 items = items.filter(item => {
                     const categoryName = categoryMap.get(item.categoryId)?.name || '';
-                    const haystack = [item.name, categoryName, item.note, item.accountNote, item.url]
+                    const subtaskText = Array.isArray(item.subtasks) ? item.subtasks.map(st => st.title).join('\n') : '';
+                    const haystack = [item.name, categoryName, item.note, item.accountNote, item.url, subtaskText]
                         .map(Utils.normalizeText)
                         .join('\n');
                     return haystack.includes(q);
@@ -1503,7 +1683,7 @@
                     <button class="ltm-metric" data-action="quick-filter" data-range="all"><div class="num">${metrics.total}</div><div class="label">正常事项 · 点击查看全部</div></button>
                 </section>
                 <section class="ltm-toolbar">
-                    <input id="ltm-search" class="ltm-search" type="search" placeholder="搜索名称、分类、备注、网址…" value="${Utils.escapeHTML(this.state.search)}">
+                    <input id="ltm-search" class="ltm-search" type="search" placeholder="搜索名称、分类、备注、网址、子事项…" value="${Utils.escapeHTML(this.state.search)}">
                     <div class="ltm-view-tabs">
                         ${this.viewButton('active', '正常')}
                         ${this.viewButton('paused', '暂停')}
@@ -1957,6 +2137,9 @@
             const todayNum = DateEngine.dayNumber(today);
             const snoozing = snoozeNum !== null && todayNum !== null && todayNum < snoozeNum;
             const snoozeOptions = !snoozing ? ItemService.snoozeOptions(item, today) : [];
+            const subtasks = Array.isArray(item.subtasks) ? [...item.subtasks].sort((a, b) => a.order - b.order) : [];
+            const completedSubtasks = subtasks.filter(st => st.completed).length;
+            const subtasksExpanded = this.state.expandedSubtasks.has(item.id);
 
             let actions = '';
             if (item.trashedAt) {
@@ -1974,10 +2157,11 @@
                     : `<button class="ltm-btn" data-action="set-status" data-id="${Utils.escapeHTML(item.id)}" data-status="active">恢复正常</button>${item.status === 'paused' ? `<button class="ltm-btn" data-action="set-status" data-id="${Utils.escapeHTML(item.id)}" data-status="archived">归档</button>` : `<button class="ltm-btn" data-action="set-status" data-id="${Utils.escapeHTML(item.id)}" data-status="paused">转为暂停</button>`}`;
 
                 const secondary = [
+                    !subtasks.length ? `<button class="ltm-btn" data-action="open-subtasks" data-id="${Utils.escapeHTML(item.id)}">＋ 子事项</button>` : '',
                     `<button class="ltm-btn" data-action="edit" data-id="${Utils.escapeHTML(item.id)}">编辑</button>`,
                     statusAction,
                     `<button class="ltm-btn ltm-btn-danger" data-action="trash" data-id="${Utils.escapeHTML(item.id)}">删除</button>`,
-                ].join('');
+                ].filter(Boolean).join('');
 
                 actions = primary + secondary;
             }
@@ -1998,9 +2182,40 @@
                         </div>
                         ${item.note ? `<div class="ltm-note">${Utils.escapeHTML(item.note)}</div>` : ''}
                         ${snoozing ? `<div class="ltm-note" style="margin-top:7px;color:#6b7280;">提醒暂停至 ${Utils.escapeHTML(item.snoozeUntil)}</div>` : ''}
+                        ${(subtasks.length || subtasksExpanded) ? `
+                            <div class="ltm-subtask-summary">
+                                <strong>子事项 ${completedSubtasks} / ${subtasks.length}</strong>
+                                <button data-action="toggle-subtasks" data-id="${Utils.escapeHTML(item.id)}">${subtasksExpanded ? '收起 ▲' : '展开 ▼'}</button>
+                            </div>
+                        ` : ''}
+                        ${subtasksExpanded ? this.renderSubtaskPanel(item, subtasks) : ''}
                     </div>
                     <div class="ltm-card-actions">${actions}</div>
                 </article>
+            `;
+        },
+
+        renderSubtaskPanel(item, subtasks = null) {
+            const list = subtasks || (Array.isArray(item.subtasks) ? [...item.subtasks].sort((a, b) => a.order - b.order) : []);
+            const readOnly = Boolean(item.trashedAt);
+            const rows = list.length ? list.map(st => `
+                <div class="ltm-subtask-row" ${readOnly ? '' : 'draggable="true"'} data-item-id="${Utils.escapeHTML(item.id)}" data-subtask-id="${Utils.escapeHTML(st.id)}">
+                    <span class="ltm-subtask-handle" title="拖动排序">${readOnly ? '·' : '⋮⋮'}</span>
+                    <input type="checkbox" ${st.completed ? 'checked' : ''} ${readOnly ? 'disabled' : ''} data-action="toggle-subtask" data-id="${Utils.escapeHTML(item.id)}" data-subtask-id="${Utils.escapeHTML(st.id)}" title="完成 / 取消完成">
+                    <span class="ltm-subtask-title ${st.completed ? 'done' : ''}">${Utils.escapeHTML(st.title)}</span>
+                    ${readOnly ? '' : `<span class="ltm-subtask-actions"><button data-action="edit-subtask" data-id="${Utils.escapeHTML(item.id)}" data-subtask-id="${Utils.escapeHTML(st.id)}">编辑</button><button class="danger" data-action="delete-subtask" data-id="${Utils.escapeHTML(item.id)}" data-subtask-id="${Utils.escapeHTML(st.id)}">删除</button></span>`}
+                </div>
+            `).join('') : '<div class="ltm-help">还没有子事项。</div>';
+            return `
+                <div class="ltm-subtask-panel">
+                    <div class="ltm-subtask-list">${rows}</div>
+                    ${readOnly ? '' : `
+                        <div class="ltm-subtask-add">
+                            <input type="text" maxlength="200" data-subtask-input="${Utils.escapeHTML(item.id)}" placeholder="输入子事项，回车添加…">
+                            <button class="ltm-btn" data-action="add-subtask" data-id="${Utils.escapeHTML(item.id)}">添加</button>
+                        </div>
+                    `}
+                </div>
             `;
         },
 
@@ -2116,6 +2331,13 @@
                                         <label for="ltm-note">备注</label>
                                         <textarea id="ltm-note" name="note" placeholder="例如：洛杉矶节点，年付">${Utils.escapeHTML(item?.note || '')}</textarea>
                                     </div>
+
+                                    ${item && Array.isArray(item.subtasks) && item.subtasks.length ? `
+                                        <div class="ltm-field full">
+                                            <label>子事项</label>
+                                            <div class="ltm-help">当前 ${item.subtasks.filter(st => st.completed).length} / ${item.subtasks.length} 已完成。子事项请在首页卡片中展开管理。</div>
+                                        </div>
+                                    ` : ''}
 
                                     <details class="ltm-details">
                                         <summary>更多设置</summary>
@@ -2264,6 +2486,84 @@
             if (customField) customField.style.display = recurring && preset === 'custom' ? '' : 'none';
         },
 
+        toggleSubtasks(id, focusAdd = false) {
+            if (!id) return;
+            if (focusAdd) this.state.expandedSubtasks.add(id);
+            else if (this.state.expandedSubtasks.has(id)) this.state.expandedSubtasks.delete(id);
+            else this.state.expandedSubtasks.add(id);
+            this.renderListOnly();
+            if (focusAdd || this.state.expandedSubtasks.has(id)) {
+                requestAnimationFrame(() => document.querySelector(`[data-subtask-input="${CSS.escape(id)}"]`)?.focus());
+            }
+        },
+
+        addSubtask(id) {
+            const input = document.querySelector(`[data-subtask-input="${CSS.escape(id)}"]`);
+            const title = input?.value?.trim() || '';
+            if (!title) return this.toast('请输入子事项名称');
+            try {
+                ItemService.addSubtask(id, title);
+                this.state.expandedSubtasks.add(id);
+                this.renderListOnly();
+                requestAnimationFrame(() => document.querySelector(`[data-subtask-input="${CSS.escape(id)}"]`)?.focus());
+                this.toast('子事项已添加');
+            } catch (error) {
+                this.toast(error.message || '添加子事项失败');
+            }
+        },
+
+        toggleSubtask(itemId, subtaskId, completed) {
+            try {
+                ItemService.toggleSubtask(itemId, subtaskId, completed);
+                this.state.expandedSubtasks.add(itemId);
+                this.renderListOnly();
+            } catch (error) {
+                this.toast(error.message || '更新子事项失败');
+            }
+        },
+
+        editSubtask(itemId, subtaskId) {
+            const db = Storage.loadDatabase();
+            const item = ItemService.find(db, itemId);
+            const subtask = item?.subtasks?.find(st => st.id === subtaskId);
+            if (!subtask) return this.toast('找不到该子事项');
+            const next = window.prompt('修改子事项', subtask.title);
+            if (next === null) return;
+            try {
+                ItemService.renameSubtask(itemId, subtaskId, next);
+                this.state.expandedSubtasks.add(itemId);
+                this.renderListOnly();
+                this.toast('子事项已修改');
+            } catch (error) {
+                this.toast(error.message || '修改子事项失败');
+            }
+        },
+
+        confirmDeleteSubtask(itemId, subtaskId) {
+            const db = Storage.loadDatabase();
+            const item = ItemService.find(db, itemId);
+            const subtask = item?.subtasks?.find(st => st.id === subtaskId);
+            if (!subtask) return this.toast('找不到该子事项');
+            this.openConfirm({
+                title: '删除子事项？',
+                message: `“${subtask.title}”\n删除后可通过自动快照恢复。`,
+                confirmText: '删除子事项',
+                danger: true,
+                onConfirm: () => {
+                    try {
+                        ItemService.deleteSubtask(itemId, subtaskId);
+                        this.closeModal();
+                        this.state.expandedSubtasks.add(itemId);
+                        this.renderListOnly();
+                        this.toast('子事项已删除');
+                    } catch (error) {
+                        this.closeModal();
+                        this.toast(error.message || '删除子事项失败');
+                    }
+                },
+            });
+        },
+
         confirmComplete(id) {
             const db = Storage.loadDatabase();
             const item = ItemService.find(db, id);
@@ -2282,10 +2582,12 @@
             const nextLine = recurring
                 ? `下一次：${preview.nextDueDate}\n顺延：${modeLabel}${preview.skippedCycles > 1 ? `\n已跨过 ${preview.skippedCycles} 个周期，直接跳到第一个未来日期` : ''}`
                 : '处理后：自动移入归档';
+            const unfinishedSubtasks = Array.isArray(item.subtasks) ? item.subtasks.filter(st => !st.completed).length : 0;
+            const subtaskWarning = unfinishedSubtasks > 0 ? `\n\n⚠ 还有 ${unfinishedSubtasks} 个子事项未完成。仍然可以处理主事项。` : '';
 
             this.openConfirm({
                 title,
-                message: `“${item.name}”\n原到期：${preview.previousDueDate}\n处理日：${preview.handledDate}\n${nextLine}`,
+                message: `“${item.name}”\n原到期：${preview.previousDueDate}\n处理日：${preview.handledDate}\n${nextLine}${subtaskWarning}`,
                 confirmText: recurring ? '确认已续费' : '确认已处理',
                 onConfirm: () => {
                     try {

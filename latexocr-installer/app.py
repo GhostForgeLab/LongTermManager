@@ -15,7 +15,7 @@ import requests
 from PIL import Image, ImageGrab, ImageTk
 
 APP_NAME = "LaTeX OCR"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.0.1"
 WEIGHTS_URL = "https://github.com/lukas-blecher/LaTeX-OCR/releases/download/v0.0.1/weights.pth"
 RESIZER_URL = "https://github.com/lukas-blecher/LaTeX-OCR/releases/download/v0.0.1/image_resizer.pth"
 WEIGHTS_SIZE = 102_113_875
@@ -179,7 +179,7 @@ class SnipOverlay:
 
 
 class LatexOcrApp:
-    def __init__(self):
+    def __init__(self, start_worker: bool = True):
         enable_windows_dpi_awareness()
         self.root = Tk()
         self.root.title(f"{APP_NAME} {APP_VERSION}")
@@ -201,7 +201,8 @@ class LatexOcrApp:
 
         self.build_ui()
         self.root.after(80, self.poll_queue)
-        threading.Thread(target=self.prepare_model, daemon=True).start()
+        if start_worker:
+            threading.Thread(target=self.prepare_model, daemon=True).start()
 
     def build_ui(self):
         style = ttk.Style(self.root)
@@ -430,6 +431,14 @@ def self_test() -> int:
             return 2
         if not hasattr(torch, "__version__") or LatexOCR is None:
             return 3
+
+        # Real UI smoke test: create the complete main window without starting
+        # model download/loading, then destroy it. This catches invalid Tk
+        # geometry/padding/options that import-only checks cannot detect.
+        app = LatexOcrApp(start_worker=False)
+        app.root.withdraw()
+        app.root.update_idletasks()
+        app.root.destroy()
         return 0
     except Exception:
         return 4

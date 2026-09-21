@@ -239,16 +239,16 @@ class LatexOcrApp:
         self.output = Text(right, wrap="word", font=("Consolas", 11), undo=True, padx=10, pady=10)
         self.output.pack(fill="both", expand=True, padx=8, pady=(0, 8))
 
-        opts = Frame(self.root, padx=18, pady=(0, 6))
-        opts.pack(fill="x")
+        opts = Frame(self.root, padx=18, pady=0)
+        opts.pack(fill="x", pady=(0, 6))
         Label(opts, text="格式：").pack(side="left")
         for label, value in [("LaTeX", "latex"), ("Raw", "raw"), ("Display $$", "display")]:
             Radiobutton(opts, text=label, variable=self.format_var, value=value, command=self.refresh_output).pack(side="left", padx=(0, 8))
         Checkbutton(opts, text="识别后自动复制", variable=self.auto_copy).pack(side="left", padx=(10, 0))
         Button(opts, text="复制结果", command=self.copy_result, padx=12).pack(side="right")
 
-        status = Frame(self.root, padx=18, pady=(4, 14))
-        status.pack(fill="x")
+        status = Frame(self.root, padx=18, pady=0)
+        status.pack(fill="x", pady=(4, 14))
         self.progress = ttk.Progressbar(status, orient="horizontal", mode="determinate", maximum=100)
         self.progress.pack(fill="x")
         Label(status, textvariable=self.status_var, anchor="w", fg="#555", pady=4).pack(fill="x")

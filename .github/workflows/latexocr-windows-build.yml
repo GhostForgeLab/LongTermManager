@@ -1,0 +1,78 @@
+name: Build LaTeX OCR Windows Installer
+
+on:
+  push:
+    branches:
+      - latex-ocr-installer-build
+    paths:
+      - "latexocr-installer/**"
+      - ".github/workflows/latexocr-windows-build.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          architecture: "x64"
+          cache: "pip"
+          cache-dependency-path: "latexocr-installer/requirements-build.txt"
+
+      - name: Install CPU PyTorch
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install torch==2.2.2+cpu torchvision==0.17.2+cpu --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Install application dependencies
+        shell: pwsh
+        run: |
+          python -m pip install -r latexocr-installer/requirements-build.txt
+          python -c "from pix2tex.cli import LatexOCR; import torch; import tkinter; print('dependency check ok', torch.__version__)"
+
+      - name: Build application
+        working-directory: latexocr-installer
+        shell: pwsh
+        run: |
+          pyinstaller --clean --noconfirm latexocr.spec
+          if (!(Test-Path "dist\LaTeX-OCR\LaTeX-OCR.exe")) { throw "LaTeX-OCR.exe was not created" }
+
+      - name: Run packaged self-test
+        working-directory: latexocr-installer
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath "dist\LaTeX-OCR\LaTeX-OCR.exe" -ArgumentList "--self-test" -PassThru -Wait
+          if ($p.ExitCode -ne 0) { throw "Packaged executable self-test failed with exit code $($p.ExitCode)" }
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress -y
+
+      - name: Build installer
+        working-directory: latexocr-installer
+        shell: pwsh
+        run: |
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "installer.iss"
+          $setup = Get-ChildItem "output\LaTeX-OCR-Setup-v1.0.0-x64.exe"
+          if (!$setup) { throw "Installer was not created" }
+          Get-FileHash $setup.FullName -Algorithm SHA256 | Format-List
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LaTeX-OCR-Setup-v1.0.0-x64
+          path: latexocr-installer/output/LaTeX-OCR-Setup-v1.0.0-x64.exe
+          if-no-files-found: error
+          retention-days: 30

@@ -65,14 +65,14 @@ jobs:
         shell: pwsh
         run: |
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "installer.iss"
-          $setup = Get-ChildItem "output\LaTeX-OCR-Setup-v1.0.1-x64.exe"
+          $setup = Get-ChildItem "output\LaTeX-OCR-Setup-v1.0.2-x64.exe"
           if (!$setup) { throw "Installer was not created" }
           Get-FileHash $setup.FullName -Algorithm SHA256 | Format-List
 
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
         with:
-          name: LaTeX-OCR-Setup-v1.0.1-x64
-          path: latexocr-installer/output/LaTeX-OCR-Setup-v1.0.1-x64.exe
+          name: LaTeX-OCR-Setup-v1.0.2-x64
+          path: latexocr-installer/output/LaTeX-OCR-Setup-v1.0.2-x64.exe
           if-no-files-found: error
           retention-days: 30

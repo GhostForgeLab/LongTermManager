@@ -15,7 +15,7 @@ import requests
 from PIL import Image, ImageGrab, ImageTk
 
 APP_NAME = "LaTeX OCR"
-APP_VERSION = "1.0.1"
+APP_VERSION = "1.0.2"
 WEIGHTS_URL = "https://github.com/lukas-blecher/LaTeX-OCR/releases/download/v0.0.1/weights.pth"
 RESIZER_URL = "https://github.com/lukas-blecher/LaTeX-OCR/releases/download/v0.0.1/image_resizer.pth"
 WEIGHTS_SIZE = 102_113_875
@@ -138,9 +138,28 @@ class SnipOverlay:
         self.canvas = Canvas(self.root, width=self.vw, height=self.vh, highlightthickness=0, cursor="cross")
         self.canvas.pack(fill="both", expand=True)
         self.canvas.create_image(0, 0, image=self.photo, anchor="nw")
-        self.canvas.create_text(24, 22, text="拖动选择公式区域 · Esc 取消", anchor="nw", fill="white", font=("Segoe UI", 16, "bold"))
+
+        # Screenshot selection UX:
+        # dim everything outside the selection, keep the selected area at full
+        # brightness, and draw a double high-contrast border that stays visible
+        # on both white documents and dark backgrounds.
+        self.mask_ids = [
+            self.canvas.create_rectangle(0, 0, 0, 0, fill="black", outline="", stipple="gray50")
+            for _ in range(4)
+        ]
+        self.full_mask = self.canvas.create_rectangle(
+            0, 0, self.vw, self.vh, fill="black", outline="", stipple="gray50"
+        )
+        self.outer_rect = self.canvas.create_rectangle(0, 0, 0, 0, outline="black", width=5)
+        self.inner_rect = self.canvas.create_rectangle(0, 0, 0, 0, outline="#00E5FF", width=2)
+        self.help_text = self.canvas.create_text(
+            24, 22,
+            text="拖动选择公式区域 · Esc 取消",
+            anchor="nw",
+            fill="white",
+            font=("Segoe UI", 16, "bold"),
+        )
         self.start_x = self.start_y = 0
-        self.rect = None
         self.canvas.bind("<ButtonPress-1>", self.on_press)
         self.canvas.bind("<B1-Motion>", self.on_drag)
         self.canvas.bind("<ButtonRelease-1>", self.on_release)
@@ -149,15 +168,34 @@ class SnipOverlay:
         self.root.deiconify()
         self.root.focus_force()
 
+    def _update_selection_visual(self, x, y):
+        x = max(0, min(self.vw, x))
+        y = max(0, min(self.vh, y))
+        x1, x2 = sorted((self.start_x, x))
+        y1, y2 = sorted((self.start_y, y))
+
+        # Four masks cover only the area outside the live selection.
+        self.canvas.coords(self.mask_ids[0], 0, 0, self.vw, y1)
+        self.canvas.coords(self.mask_ids[1], 0, y2, self.vw, self.vh)
+        self.canvas.coords(self.mask_ids[2], 0, y1, x1, y2)
+        self.canvas.coords(self.mask_ids[3], x2, y1, self.vw, y2)
+
+        self.canvas.coords(self.outer_rect, x1, y1, x2, y2)
+        self.canvas.coords(self.inner_rect, x1, y1, x2, y2)
+        self.canvas.tag_raise(self.outer_rect)
+        self.canvas.tag_raise(self.inner_rect)
+        self.canvas.tag_raise(self.help_text)
+
     def on_press(self, event):
-        self.start_x, self.start_y = event.x, event.y
-        if self.rect:
-            self.canvas.delete(self.rect)
-        self.rect = self.canvas.create_rectangle(self.start_x, self.start_y, self.start_x, self.start_y, outline="white", width=2)
+        self.start_x = max(0, min(self.vw, event.x))
+        self.start_y = max(0, min(self.vh, event.y))
+        if self.full_mask is not None:
+            self.canvas.delete(self.full_mask)
+            self.full_mask = None
+        self._update_selection_visual(event.x, event.y)
 
     def on_drag(self, event):
-        if self.rect:
-            self.canvas.coords(self.rect, self.start_x, self.start_y, event.x, event.y)
+        self._update_selection_visual(event.x, event.y)
 
     def on_release(self, event):
         x1, x2 = sorted((self.start_x, event.x))

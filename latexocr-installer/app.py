@@ -420,7 +420,24 @@ class LatexOcrApp:
         self.root.mainloop()
 
 
+def self_test() -> int:
+    try:
+        import torch
+        import pix2tex
+        from pix2tex.cli import LatexOCR
+        config = Path(pix2tex.__file__).resolve().parent / "model" / "settings" / "config.yaml"
+        if not config.is_file():
+            return 2
+        if not hasattr(torch, "__version__") or LatexOCR is None:
+            return 3
+        return 0
+    except Exception:
+        return 4
+
+
 def main():
+    if "--self-test" in sys.argv:
+        raise SystemExit(self_test())
     LatexOcrApp().run()
 
 

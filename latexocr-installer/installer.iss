@@ -1,5 +1,5 @@
 #define MyAppName "LaTeX OCR"
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "1.0.1"
 #define MyAppPublisher "GhostForgeLab"
 #define MyAppExeName "LaTeX-OCR.exe"
 
